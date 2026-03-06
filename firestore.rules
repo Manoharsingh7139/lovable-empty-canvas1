@@ -1,0 +1,160 @@
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: employees
+// Document ID: {employeeId}
+// Fields:
+//   - id: string (required) - Employee UID
+//   - name: string (required) - Full name
+//   - email: string (required, email format)
+//   - role: string (required, enum: ['admin', 'member'])
+//   - designation: string (optional)
+//   - functionL2: string (optional)
+//   - gender: string (optional)
+//   - reportingManagerCode: string (optional)
+//   - reportingManagerName: string (optional)
+//   - reportingManagersManagerCode: string (optional)
+//   - reportingManagersManagerName: string (optional)
+//   - level: string (optional)
+//   - levelCode: string (optional)
+//   - jobBand: string (optional)
+//   - bandCode: string (optional)
+//   - manager: string (optional)
+//
+// Collection: attendance
+// Document ID: {recordId} (usually {date}_{employeeId})
+// Fields:
+//   - employeeId: string (required)
+//   - date: string (required, YYYY-MM-DD)
+//   - status: string (required, enum: ['in-office', 'wfh', 'leave'])
+//   - updatedAt: string (required, ISO 8601)
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (
+          (exists(/databases/$(database)/documents/employees/$(request.auth.uid)) && 
+           get(/databases/$(database)/documents/employees/$(request.auth.uid)).data.role == 'admin') ||
+          request.auth.token.get('email', '').lower() == "virajaiitk@gmail.com"
+        );
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidDate(dateStr) {
+      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}$");
+    }
+
+    function isValidDateTime(dateTimeStr) {
+      return dateTimeStr is string && dateTimeStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidEmployee(data) {
+      return data.keys().hasAll(['id', 'name', 'email', 'role']) &&
+             data.keys().hasOnly([
+               'id', 'name', 'email', 'role',
+               'designation', 'functionL2', 'gender', 
+               'reportingManagerCode', 'reportingManagerName', 
+               'reportingManagersManagerCode', 'reportingManagersManagerName', 
+               'level', 'levelCode', 'jobBand', 'bandCode', 'manager'
+             ]) &&
+             data.id is string && data.id.size() > 0 &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 500 &&
+             isValidEmail(data.email) &&
+             data.role in ['admin', 'member'] &&
+             (!('designation' in data) || (data.designation is string && data.designation.size() < 500)) &&
+             (!('functionL2' in data) || (data.functionL2 is string && data.functionL2.size() < 500)) &&
+             (!('gender' in data) || (data.gender is string && data.gender.size() < 200)) &&
+             (!('reportingManagerCode' in data) || (data.reportingManagerCode is string && data.reportingManagerCode.size() < 500)) &&
+             (!('reportingManagerName' in data) || (data.reportingManagerName is string && data.reportingManagerName.size() < 500)) &&
+             (!('reportingManagersManagerCode' in data) || (data.reportingManagersManagerCode is string && data.reportingManagersManagerCode.size() < 500)) &&
+             (!('reportingManagersManagerName' in data) || (data.reportingManagersManagerName is string && data.reportingManagersManagerName.size() < 500)) &&
+             (!('level' in data) || (data.level is string && data.level.size() < 500)) &&
+             (!('levelCode' in data) || (data.levelCode is string && data.levelCode.size() < 500)) &&
+             (!('jobBand' in data) || (data.jobBand is string && data.jobBand.size() < 500)) &&
+             (!('bandCode' in data) || (data.bandCode is string && data.bandCode.size() < 500)) &&
+             (!('manager' in data) || (data.manager is string && data.manager.size() < 500));
+    }
+
+    function isValidAttendance(data) {
+      return data.keys().hasAll(['employeeId', 'date', 'status', 'updatedAt']) &&
+             data.keys().hasOnly(['employeeId', 'date', 'status', 'updatedAt']) &&
+             data.employeeId is string && data.employeeId.size() < 100 &&
+             isValidDate(data.date) &&
+             data.status in ['in-office', 'wfh', 'leave'] &&
+             isValidDateTime(data.updatedAt);
+    }
+
+    function isValidHoliday(data) {
+      return data.keys().hasAll(['date', 'name']) &&
+             data.keys().hasOnly(['date', 'name']) &&
+             isValidDate(data.date) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /employees/{employeeId} {
+      // Users can read their own profile, admins can read all
+      allow read: if isAuthenticated() && (isOwner(employeeId) || isAdmin());
+      
+      // Only admins can create/update employees, or a user can create their own initial profile as 'member'
+      allow create: if isAuthenticated() && isValidEmployee(request.resource.data) && 
+                    ((isOwner(employeeId) && request.resource.data.role == 'member') || isAdmin());
+      
+      allow update: if isAuthenticated() && isValidEmployee(request.resource.data) && 
+                    ((isOwner(employeeId) && request.resource.data.role == resource.data.role) || isAdmin());
+      
+      allow delete: if isAdmin();
+    }
+
+    match /attendance/{recordId} {
+      // All authenticated team members can read attendance
+      allow read: if isAuthenticated();
+      
+      // Users can mark their own attendance, admins can mark for anyone
+      allow create: if isAuthenticated() && isValidAttendance(request.resource.data) &&
+                    (isOwner(request.resource.data.employeeId) || isAdmin());
+      
+      allow update: if isAuthenticated() && isValidAttendance(request.resource.data) &&
+                    (isOwner(request.resource.data.employeeId) || isAdmin());
+      
+      allow delete: if isAdmin();
+    }
+
+    match /holidays/{date} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() && isValidHoliday(request.resource.data);
+    }
+
+    // Default deny
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}

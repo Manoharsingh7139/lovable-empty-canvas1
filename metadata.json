@@ -1,0 +1,5 @@
+{
+  "name": "Remix: Team Attendance Tracker",
+  "description": "Daily attendance tracking for teams with monthly threshold monitoring and compliance reporting.",
+  "requestFramePermissions": []
+}

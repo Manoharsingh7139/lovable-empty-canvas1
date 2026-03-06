@@ -1,0 +1,64 @@
+{
+  "entities": {
+    "Employee": {
+      "title": "Employee",
+      "description": "A team member whose attendance is tracked.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "The unique ID of the employee (usually their Firebase Auth UID)." },
+        "name": { "type": "string", "description": "Full name of the employee." },
+        "email": { "type": "string", "format": "email", "description": "Email address of the employee." },
+        "role": { "type": "string", "enum": ["admin", "member"], "description": "Role in the team." },
+        "designation": { "type": "string", "description": "Job title of the employee." },
+        "functionL2": { "type": "string", "description": "Function (L2) of the employee." },
+        "gender": { "type": "string", "description": "Gender of the employee." },
+        "reportingManagerCode": { "type": "string", "description": "Code of the reporting manager." },
+        "reportingManagerName": { "type": "string", "description": "Name of the reporting manager." },
+        "reportingManagersManagerCode": { "type": "string", "description": "Code of the reporting manager's manager." },
+        "reportingManagersManagerName": { "type": "string", "description": "Name of the reporting manager's manager." },
+        "level": { "type": "string", "description": "Level of the employee." },
+        "levelCode": { "type": "string", "description": "Level code of the employee." },
+        "jobBand": { "type": "string", "description": "Job band of the employee." },
+        "bandCode": { "type": "string", "description": "Band code of the employee." },
+        "manager": { "type": "string", "description": "Name or email of the employee's manager (legacy/display)." }
+      },
+      "required": ["id", "name", "email", "role"]
+    },
+    "AttendanceRecord": {
+      "title": "Attendance Record",
+      "description": "Daily attendance status for an employee.",
+      "type": "object",
+      "properties": {
+        "employeeId": { "type": "string", "description": "ID of the employee." },
+        "date": { "type": "string", "description": "Date in YYYY-MM-DD format." },
+        "status": { "type": "string", "enum": ["in-office", "wfh", "leave"], "description": "Attendance status." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "When the record was last updated." }
+      },
+      "required": ["employeeId", "date", "status", "updatedAt"]
+    },
+    "Holiday": {
+      "title": "Holiday",
+      "description": "An official holiday date.",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "description": "Date in YYYY-MM-DD format." },
+        "name": { "type": "string", "description": "Name of the holiday." }
+      },
+      "required": ["date", "name"]
+    }
+  },
+  "firestore": {
+    "/employees/{employeeId}": {
+      "schema": "Employee",
+      "description": "Collection of team members."
+    },
+    "/attendance/{recordId}": {
+      "schema": "AttendanceRecord",
+      "description": "Collection of daily attendance records."
+    },
+    "/holidays/{date}": {
+      "schema": "Holiday",
+      "description": "Collection of official holidays."
+    }
+  }
+}
