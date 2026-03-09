@@ -1,17 +1,9 @@
-import React, { useState, useEffect, useMemo, Component, ReactNode } from 'react';
+import React, { useState, useEffect, useMemo, Component } from 'react';
+import { supabase } from '@/src/integrations/supabase/client';
+import type { User } from '@supabase/supabase-js';
 import { 
-  auth, db, handleFirestoreError, OperationType 
-} from './firebase';
-import { 
-  signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile,
-  onAuthStateChanged, signOut, User 
-} from 'firebase/auth';
-import { 
-  collection, doc, getDocs, setDoc, onSnapshot, query, where, Timestamp, deleteDoc
-} from 'firebase/firestore';
-import { 
-  format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, 
-  isAfter, isBefore, startOfDay, addDays, subDays, parseISO, isWeekend
+  format, startOfMonth, endOfMonth, eachDayOfInterval, 
+  addDays, subDays, parseISO, isWeekend
 } from 'date-fns';
 import * as XLSX from 'xlsx';
 import { 
@@ -55,7 +47,7 @@ interface Employee {
 
 interface AttendanceRecord {
   employeeId: string;
-  date: string; // YYYY-MM-DD
+  date: string;
   status: AttendanceStatus;
   updatedAt: string;
 }
@@ -63,6 +55,39 @@ interface AttendanceRecord {
 interface Holiday {
   date: string;
   name: string;
+}
+
+// Helper: map DB row to Employee
+function dbToEmployee(row: any): Employee {
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    role: 'member', // role is determined from user_roles table
+    designation: row.designation || undefined,
+    functionL2: row.function_l2 || undefined,
+    gender: row.gender || undefined,
+    reportingManagerCode: row.reporting_manager_code || undefined,
+    reportingManagerName: row.reporting_manager_name || undefined,
+    reportingManagersManagerCode: row.reporting_managers_manager_code || undefined,
+    reportingManagersManagerName: row.reporting_managers_manager_name || undefined,
+    level: row.level || undefined,
+    levelCode: row.level_code || undefined,
+    jobBand: row.job_band || undefined,
+    bandCode: row.band_code || undefined,
+    manager: row.manager || undefined,
+    workType: (row.work_type as 'local' | 'remote') || 'local',
+    onLongLeave: row.on_long_leave || false,
+  };
+}
+
+function dbToAttendance(row: any): AttendanceRecord {
+  return {
+    employeeId: row.employee_id,
+    date: row.date,
+    status: row.status as AttendanceStatus,
+    updatedAt: row.updated_at,
+  };
 }
 
 // Error Boundary Component
@@ -158,58 +183,90 @@ const AttendanceTracker = () => {
   const [deletingEmployee, setDeletingEmployee] = useState<Employee | null>(null);
   const [newHoliday, setNewHoliday] = useState({ date: format(new Date(), 'yyyy-MM-dd'), name: '' });
 
-  // Auth Listener
+  // Auth & Profile Listener
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (u) => {
+    // Set up auth state listener FIRST
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      const u = session?.user ?? null;
       setUser(u);
+      
       if (u) {
-        try {
-          const employeeRef = doc(db, 'employees', u.uid);
-          const snap = await getDocs(query(collection(db, 'employees'), where('id', '==', u.uid)));
+        // Load profile from employees table
+        const { data: empData } = await supabase
+          .from('employees')
+          .select('*')
+          .eq('email', u.email!)
+          .maybeSingle();
+        
+        if (empData) {
+          // Check admin role
+          const { data: roleData } = await supabase
+            .from('user_roles')
+            .select('role')
+            .eq('user_id', u.id)
+            .eq('role', 'admin')
+            .maybeSingle();
           
-          if (snap.empty) {
-            const newProfile: Employee = {
-              id: u.uid,
-              name: u.displayName || 'Anonymous',
-              email: u.email || '',
-              role: u.email === 'virajaiitk@gmail.com' ? 'admin' : 'member'
-            };
-            await setDoc(employeeRef, newProfile);
-            setProfile(newProfile);
-          } else {
-            setProfile(snap.docs[0].data() as Employee);
-          }
-        } catch (error) {
-          handleFirestoreError(error, OperationType.GET, 'employees');
+          const emp = dbToEmployee(empData);
+          emp.role = roleData ? 'admin' : 'member';
+          setProfile(emp);
+        } else {
+          setProfile(null);
         }
       } else {
         setProfile(null);
       }
       setLoading(false);
     });
-    return () => unsubscribe();
+
+    // Then check existing session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) setLoading(false);
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
-  // Data Listeners
+  // Data Listeners with Realtime
   useEffect(() => {
     if (!user) return;
 
-    const unsubEmployees = onSnapshot(collection(db, 'employees'), (snap) => {
-      setEmployees(snap.docs.map(doc => doc.data() as Employee));
-    }, (err) => handleFirestoreError(err, OperationType.LIST, 'employees'));
+    // Initial data load
+    const loadData = async () => {
+      const [empRes, attRes, holRes] = await Promise.all([
+        supabase.from('employees').select('*'),
+        supabase.from('attendance').select('*'),
+        supabase.from('holidays').select('*'),
+      ]);
+      
+      if (empRes.data) setEmployees(empRes.data.map(dbToEmployee));
+      if (attRes.data) setAttendance(attRes.data.map(dbToAttendance));
+      if (holRes.data) setHolidays(holRes.data as Holiday[]);
+    };
+    loadData();
 
-    const unsubAttendance = onSnapshot(collection(db, 'attendance'), (snap) => {
-      setAttendance(snap.docs.map(doc => doc.data() as AttendanceRecord));
-    }, (err) => handleFirestoreError(err, OperationType.LIST, 'attendance'));
-
-    const unsubHolidays = onSnapshot(collection(db, 'holidays'), (snap) => {
-      setHolidays(snap.docs.map(doc => doc.data() as Holiday));
-    }, (err) => handleFirestoreError(err, OperationType.LIST, 'holidays'));
+    // Realtime subscriptions
+    const channel = supabase
+      .channel('app-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'employees' }, () => {
+        supabase.from('employees').select('*').then(({ data }) => {
+          if (data) setEmployees(data.map(dbToEmployee));
+        });
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance' }, () => {
+        supabase.from('attendance').select('*').then(({ data }) => {
+          if (data) setAttendance(data.map(dbToAttendance));
+        });
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'holidays' }, () => {
+        supabase.from('holidays').select('*').then(({ data }) => {
+          if (data) setHolidays(data as Holiday[]);
+        });
+      })
+      .subscribe();
 
     return () => {
-      unsubEmployees();
-      unsubAttendance();
-      unsubHolidays();
+      supabase.removeChannel(channel);
     };
   }, [user]);
 
@@ -218,122 +275,142 @@ const AttendanceTracker = () => {
     setAuthError('');
     try {
       if (authMode === 'signup') {
-        const cred = await createUserWithEmailAndPassword(auth, authEmail, authPassword);
-        if (authName) await updateProfile(cred.user, { displayName: authName });
+        const { error } = await supabase.auth.signUp({
+          email: authEmail,
+          password: authPassword,
+          options: {
+            data: { full_name: authName },
+            emailRedirectTo: window.location.origin,
+          }
+        });
+        if (error) throw error;
+        setAuthError('Check your email for a confirmation link.');
       } else {
-        await signInWithEmailAndPassword(auth, authEmail, authPassword);
+        const { error } = await supabase.auth.signInWithPassword({
+          email: authEmail,
+          password: authPassword,
+        });
+        if (error) throw error;
       }
     } catch (error: any) {
-      const msg = error?.code === 'auth/user-not-found' ? 'No account found with this email.'
-        : error?.code === 'auth/wrong-password' ? 'Incorrect password.'
-        : error?.code === 'auth/email-already-in-use' ? 'Email already in use.'
-        : error?.code === 'auth/weak-password' ? 'Password must be at least 6 characters.'
-        : error?.code === 'auth/invalid-email' ? 'Invalid email address.'
-        : error?.message || 'Authentication failed.';
-      setAuthError(msg);
+      setAuthError(error?.message || 'Authentication failed.');
     }
   };
 
-  const handleLogout = () => signOut(auth);
+  const handleLogout = () => supabase.auth.signOut();
 
   const markAttendance = async (employeeId: string, date: Date, status: AttendanceStatus) => {
     const dateStr = format(date, 'yyyy-MM-dd');
     const recordId = `${dateStr}_${employeeId}`;
-    const record: AttendanceRecord = {
-      employeeId,
-      date: dateStr,
-      status,
-      updatedAt: new Date().toISOString()
-    };
 
-    try {
-      await setDoc(doc(db, 'attendance', recordId), record);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `attendance/${recordId}`);
-    }
+    const { error } = await supabase
+      .from('attendance')
+      .upsert({
+        id: recordId,
+        employee_id: employeeId,
+        date: dateStr,
+        status,
+        updated_at: new Date().toISOString(),
+      });
+    
+    if (error) console.error('Error marking attendance:', error);
   };
 
   const updateEmployee = async (emp: Employee) => {
-    try {
-      await setDoc(doc(db, 'employees', emp.id), emp);
+    const { error } = await supabase
+      .from('employees')
+      .update({
+        name: emp.name,
+        email: emp.email,
+        designation: emp.designation || null,
+        function_l2: emp.functionL2 || null,
+        gender: emp.gender || null,
+        reporting_manager_code: emp.reportingManagerCode || null,
+        reporting_manager_name: emp.reportingManagerName || null,
+        reporting_managers_manager_code: emp.reportingManagersManagerCode || null,
+        reporting_managers_manager_name: emp.reportingManagersManagerName || null,
+        level: emp.level || null,
+        level_code: emp.levelCode || null,
+        job_band: emp.jobBand || null,
+        band_code: emp.bandCode || null,
+        manager: emp.manager || null,
+        work_type: emp.workType || 'local',
+        on_long_leave: emp.onLongLeave || false,
+      })
+      .eq('id', emp.id);
+    
+    if (error) {
+      console.error('Error updating employee:', error);
+      alert('Failed to update employee: ' + error.message);
+    } else {
       setEditingEmployee(null);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `employees/${emp.id}`);
     }
   };
 
   const addManualMember = async () => {
     if (!newMember.name || !newMember.email) return;
-    const id = `manual_${Date.now()}`;
-    const employee: Employee = {
-      id,
-      name: newMember.name,
-      email: newMember.email,
-      role: newMember.role,
-      designation: newMember.designation,
-      functionL2: newMember.functionL2,
-      gender: newMember.gender,
-      reportingManagerCode: newMember.reportingManagerCode,
-      reportingManagerName: newMember.reportingManagerName,
-      reportingManagersManagerCode: newMember.reportingManagersManagerCode,
-      reportingManagersManagerName: newMember.reportingManagersManagerName,
-      level: newMember.level,
-      levelCode: newMember.levelCode,
-      jobBand: newMember.jobBand,
-      bandCode: newMember.bandCode,
-      manager: newMember.manager
-    };
-    try {
-      await setDoc(doc(db, 'employees', id), employee);
+
+    const { error } = await supabase
+      .from('employees')
+      .insert({
+        name: newMember.name,
+        email: newMember.email,
+        designation: newMember.designation || null,
+        function_l2: newMember.functionL2 || null,
+        gender: newMember.gender || null,
+        reporting_manager_code: newMember.reportingManagerCode || null,
+        reporting_manager_name: newMember.reportingManagerName || null,
+        reporting_managers_manager_code: newMember.reportingManagersManagerCode || null,
+        reporting_managers_manager_name: newMember.reportingManagersManagerName || null,
+        level: newMember.level || null,
+        level_code: newMember.levelCode || null,
+        job_band: newMember.jobBand || null,
+        band_code: newMember.bandCode || null,
+        manager: newMember.manager || null,
+      });
+    
+    if (error) {
+      console.error('Error adding member:', error);
+      alert('Failed to add member: ' + error.message);
+    } else {
       setShowAddMember(false);
       setNewMember({ 
-        name: '', 
-        email: '', 
-        role: 'member', 
-        designation: '', 
-        functionL2: '',
-        gender: '',
-        reportingManagerCode: '',
-        reportingManagerName: '',
-        reportingManagersManagerCode: '',
-        reportingManagersManagerName: '',
-        level: '',
-        levelCode: '',
-        jobBand: '', 
-        bandCode: '',
-        manager: '' 
+        name: '', email: '', role: 'member', designation: '', functionL2: '',
+        gender: '', reportingManagerCode: '', reportingManagerName: '',
+        reportingManagersManagerCode: '', reportingManagersManagerName: '',
+        level: '', levelCode: '', jobBand: '', bandCode: '', manager: '' 
       });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `employees/${id}`);
     }
   };
 
   const deleteMember = async (id: string) => {
-    try {
-      await deleteDoc(doc(db, 'employees', id));
+    const { error } = await supabase.from('employees').delete().eq('id', id);
+    if (error) {
+      console.error('Error deleting member:', error);
+      alert('Failed to delete member: ' + error.message);
+    } else {
       setDeletingEmployee(null);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `employees/${id}`);
     }
   };
 
   const addHoliday = async () => {
     if (!newHoliday.date || !newHoliday.name) return;
-    try {
-      await setDoc(doc(db, 'holidays', newHoliday.date), newHoliday);
+    const { error } = await supabase
+      .from('holidays')
+      .upsert({ date: newHoliday.date, name: newHoliday.name });
+    
+    if (error) {
+      console.error('Error adding holiday:', error);
+      alert('Failed to add holiday: ' + error.message);
+    } else {
       setShowAddHoliday(false);
       setNewHoliday({ date: format(new Date(), 'yyyy-MM-dd'), name: '' });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `holidays/${newHoliday.date}`);
     }
   };
 
   const deleteHoliday = async (date: string) => {
-    try {
-      await deleteDoc(doc(db, 'holidays', date));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `holidays/${date}`);
-    }
+    const { error } = await supabase.from('holidays').delete().eq('date', date);
+    if (error) console.error('Error deleting holiday:', error);
   };
 
   const handleExcelImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -349,41 +426,43 @@ const AttendanceTracker = () => {
         const ws = wb.Sheets[wsname];
         const data = XLSX.utils.sheet_to_json(ws) as any[];
 
-        for (const row of data) {
-          const rawEmail = row.Email || row.email;
-          if (!rawEmail) continue;
-          const email = String(rawEmail).trim().toLowerCase();
+        const rows = data
+          .filter(row => row.Email || row.email)
+          .map(row => {
+            const email = String(row.Email || row.email).trim().toLowerCase();
+            return {
+              name: String(row.Employee_Name || row.Name || row.name || 'Unknown').trim(),
+              email,
+              designation: String(row.Designation || row.designation || '').trim() || null,
+              function_l2: String(row['Function(L2)'] || '').trim() || null,
+              gender: String(row.Gender || '').trim() || null,
+              reporting_manager_code: String(row.ReportingManager_Code || '').trim() || null,
+              reporting_manager_name: String(row.ReportingManager_Name || '').trim() || null,
+              reporting_managers_manager_code: String(row.ReportingManagersManagerCode || '').trim() || null,
+              reporting_managers_manager_name: String(row.ReportingManagersManagerName || '').trim() || null,
+              level: String(row.Level || '').trim() || null,
+              level_code: String(row.Level_Code || '').trim() || null,
+              job_band: String(row.Band || row.JobBand || row.jobBand || row['Job Band'] || '').trim() || null,
+              band_code: String(row.Band_Code || '').trim() || null,
+              manager: String(row.ReportingManager_Name || row.Manager || row.manager || '').trim() || null,
+            };
+          });
 
-          // Generate a deterministic ID from email for manual imports
-          const id = `manual_${btoa(email).replace(/=/g, '')}`;
-          const newEmp: Employee = {
-            id,
-            name: String(row.Employee_Name || row.Name || row.name || 'Unknown').trim(),
-            email: email,
-            role: ['admin', 'member'].includes(String(row.Role || row.role || '').toLowerCase()) 
-              ? String(row.Role || row.role).toLowerCase() as 'admin' | 'member'
-              : 'member',
-            designation: String(row.Designation || row.designation || '').trim(),
-            functionL2: String(row['Function(L2)'] || '').trim(),
-            gender: String(row.Gender || '').trim(),
-            reportingManagerCode: String(row.ReportingManager_Code || '').trim(),
-            reportingManagerName: String(row.ReportingManager_Name || '').trim(),
-            reportingManagersManagerCode: String(row.ReportingManagersManagerCode || '').trim(),
-            reportingManagersManagerName: String(row.ReportingManagersManagerName || '').trim(),
-            level: String(row.Level || '').trim(),
-            levelCode: String(row.Level_Code || '').trim(),
-            jobBand: String(row.Band || row.JobBand || row.jobBand || row['Job Band'] || '').trim(),
-            bandCode: String(row.Band_Code || '').trim(),
-            manager: String(row.ReportingManager_Name || row.Manager || row.manager || '').trim()
-          };
-
-          try {
-            await setDoc(doc(db, 'employees', id), newEmp);
-          } catch (err) {
-            handleFirestoreError(err, OperationType.WRITE, `employees/${id}`);
-          }
+        if (rows.length === 0) {
+          alert('No valid rows found in the Excel file.');
+          return;
         }
-        alert('Team imported successfully!');
+
+        const { error } = await supabase
+          .from('employees')
+          .upsert(rows, { onConflict: 'email' });
+
+        if (error) {
+          console.error('Error importing:', error);
+          alert('Failed to import: ' + error.message);
+        } else {
+          alert(`Successfully imported ${rows.length} employees!`);
+        }
       } catch (error) {
         console.error('Error importing Excel:', error);
         alert('Failed to import Excel file. Please check the format.');
@@ -423,13 +502,13 @@ const AttendanceTracker = () => {
   // For attendance grid: exclude remote & long-leave
   const attendanceEmployees = useMemo(() => {
     return employees
-      .filter(emp => emp.email !== 'virajaiitk@gmail.com' && emp.workType !== 'remote' && !emp.onLongLeave)
+      .filter(emp => emp.workType !== 'remote' && !emp.onLongLeave)
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [employees]);
 
   // For manage team: filter by teamFilter state
   const allTeamEmployees = useMemo(() => {
-    return employees.filter(emp => emp.email !== 'virajaiitk@gmail.com').sort((a, b) => a.name.localeCompare(b.name));
+    return employees.sort((a, b) => a.name.localeCompare(b.name));
   }, [employees]);
 
   const remoteCount = useMemo(() => allTeamEmployees.filter(e => e.workType === 'remote').length, [allTeamEmployees]);
@@ -474,6 +553,13 @@ const AttendanceTracker = () => {
       };
     });
   }, [daysInMonth, attendanceEmployees, attendance, holidays]);
+
+  // Find the current user's employee record for permission checks
+  const currentEmployeeId = useMemo(() => {
+    if (!user) return null;
+    const emp = employees.find(e => e.email === user.email);
+    return emp?.id ?? null;
+  }, [user, employees]);
 
   if (loading) {
     return (
@@ -541,7 +627,10 @@ const AttendanceTracker = () => {
             </div>
             
             {authError && (
-              <p className="text-red-500 text-sm bg-red-50 p-3 rounded-xl">{authError}</p>
+              <p className={cn(
+                "text-sm p-3 rounded-xl",
+                authError.includes('Check your email') ? "text-emerald-600 bg-emerald-50" : "text-red-500 bg-red-50"
+              )}>{authError}</p>
             )}
             
             <button 
@@ -708,7 +797,6 @@ const AttendanceTracker = () => {
                       </div>
                     </td>
                     <td className="px-4 py-3 border-r border-stone-100 text-center">
-                      {/* Empty for Avg column in team row */}
                     </td>
                     {dailyStats.map((stat, i) => (
                       <td 
@@ -755,7 +843,7 @@ const AttendanceTracker = () => {
                       {daysInMonth.map((date, i) => {
                         const status = getAttendanceStatus(emp.id, date);
                         const isWorkDay = isWorkingDay(date);
-                        const canEdit = (profile?.role === 'admin' || emp.id === user.uid) && isWorkDay;
+                        const canEdit = (profile?.role === 'admin' || emp.id === currentEmployeeId) && isWorkDay;
                         
                         return (
                           <td 
@@ -1107,7 +1195,7 @@ const AttendanceTracker = () => {
           </>
         ) : (
           <OrgInsightsSection 
-            employees={employees.filter(emp => emp.email !== 'virajaiitk@gmail.com')}
+            employees={employees}
             attendance={attendance}
             daysInMonth={daysInMonth}
             isWorkingDay={isWorkingDay}
@@ -1299,17 +1387,6 @@ const AttendanceTracker = () => {
                       onChange={(e) => setEditingEmployee({...editingEmployee, designation: e.target.value})}
                       className="w-full p-3 bg-stone-50 border border-stone-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none transition-all"
                     />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-bold text-stone-400 uppercase tracking-widest">Role</label>
-                    <select 
-                      value={editingEmployee.role}
-                      onChange={(e) => setEditingEmployee({...editingEmployee, role: e.target.value as 'admin' | 'member'})}
-                      className="w-full p-3 bg-stone-50 border border-stone-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none transition-all"
-                    >
-                      <option value="member">Member</option>
-                      <option value="admin">Admin</option>
-                    </select>
                   </div>
                   <div className="space-y-2">
                     <label className="text-xs font-bold text-stone-400 uppercase tracking-widest">Function (L2)</label>
@@ -1536,7 +1613,7 @@ const OrgInsightsSection = ({
 
       {selectedManager && (
         <div className="space-y-8">
-          {/* Org Chart Visualization (Simplified) */}
+          {/* Org Chart Visualization */}
           <div className="bg-white p-8 rounded-3xl border border-stone-200 shadow-sm overflow-x-auto">
             <h3 className="text-lg font-bold mb-8 flex items-center gap-2">
               <Users className="w-5 h-5 text-emerald-600" />
@@ -1604,7 +1681,6 @@ const OrgInsightsSection = ({
                       {daysInMonth.map((date, i) => {
                         const isWorkDay = isWorkingDay(date);
                         const subOrgStatuses = getSubOrgAttendance(report.name, date);
-                        // Include the report themselves in the calculation
                         const reportStatus = getAttendanceStatus(report.id, date);
                         const allStatuses = [reportStatus, ...subOrgStatuses];
                         
