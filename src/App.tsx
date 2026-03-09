@@ -125,6 +125,7 @@ const AttendanceTracker = () => {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [activeTab, setActiveTab] = useState<'grid' | 'org'>('grid');
   const [selectedManagerId, setSelectedManagerId] = useState<string | null>(null);
+  const [teamFilter, setTeamFilter] = useState<'all' | 'remote' | 'long-leave'>('all');
   
   // UI States
   const [showAddMember, setShowAddMember] = useState(false);
@@ -401,11 +402,26 @@ const AttendanceTracker = () => {
     return 'unmarked';
   };
 
-  const displayEmployees = useMemo(() => {
+  // For attendance grid: exclude remote & long-leave
+  const attendanceEmployees = useMemo(() => {
     return employees
       .filter(emp => emp.email !== 'virajaiitk@gmail.com' && emp.workType !== 'remote' && !emp.onLongLeave)
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [employees]);
+
+  // For manage team: filter by teamFilter state
+  const allTeamEmployees = useMemo(() => {
+    return employees.filter(emp => emp.email !== 'virajaiitk@gmail.com').sort((a, b) => a.name.localeCompare(b.name));
+  }, [employees]);
+
+  const remoteCount = useMemo(() => allTeamEmployees.filter(e => e.workType === 'remote').length, [allTeamEmployees]);
+  const longLeaveCount = useMemo(() => allTeamEmployees.filter(e => e.onLongLeave).length, [allTeamEmployees]);
+
+  const manageTeamEmployees = useMemo(() => {
+    if (teamFilter === 'remote') return allTeamEmployees.filter(e => e.workType === 'remote');
+    if (teamFilter === 'long-leave') return allTeamEmployees.filter(e => e.onLongLeave);
+    return allTeamEmployees;
+  }, [allTeamEmployees, teamFilter]);
 
   const dailyStats = useMemo(() => {
     return daysInMonth.map(date => {
@@ -415,9 +431,9 @@ const AttendanceTracker = () => {
         return { date, percentage: 0, isBelowThreshold: false, type: status };
       }
 
-      const statuses = displayEmployees.map(e => getAttendanceStatus(e.id, date));
+      const statuses = attendanceEmployees.map(e => getAttendanceStatus(e.id, date));
       const inOfficeCount = statuses.filter(s => s === 'in-office' || s === 'unmarked').length;
-      const percentage = displayEmployees.length > 0 ? (inOfficeCount / displayEmployees.length) * 100 : 0;
+      const percentage = attendanceEmployees.length > 0 ? (inOfficeCount / attendanceEmployees.length) * 100 : 0;
       return {
         date,
         percentage,
