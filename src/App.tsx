@@ -195,7 +195,7 @@ const AttendanceTracker = () => {
         const { data: empData } = await supabase
           .from('employees')
           .select('*')
-          .eq('email', u.email)
+          .eq('email', u.email!)
           .maybeSingle();
         
         if (empData) {
