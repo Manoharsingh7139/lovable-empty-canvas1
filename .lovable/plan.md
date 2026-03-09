@@ -1,33 +1,32 @@
 
 
-## Plan: Filter Manage Team list & exclude remote/long-leave from attendance
+## Problem: Excel Team Import Silently Fails
 
-### Current State
-- `displayEmployees` (line 404-408) already filters out remote and long-leave employees for the attendance grid
-- The Manage Team section (line 882) reuses `displayEmployees`, so remote/long-leave employees are hidden there too — this needs to change
+Two root causes:
 
-### Changes (all in `src/App.tsx`)
+### 1. No UNIQUE constraint on `email` column
+The `upsert` call in `AdminControls.tsx` uses `onConflict: 'email'`, but the `employees` table has no `UNIQUE` constraint on the `email` column. Without this, the upsert cannot detect conflicts and the operation fails silently.
 
-**1. Add a team filter state**
-- New state: `teamFilter: 'all' | 'remote' | 'long-leave'` (default `'all'`)
+**Fix**: Add a database migration to create a unique constraint on `employees.email`.
 
-**2. Compute filtered lists**
-- `attendanceEmployees` — excludes remote + long-leave (current `displayEmployees` logic, used for grid/stats)
-- `manageTeamEmployees` — filtered by `teamFilter` state:
-  - `'all'` → all employees (minus admin email)
-  - `'remote'` → only `workType === 'remote'`
-  - `'long-leave'` → only `onLongLeave === true`
-- Precompute counts: `remoteCount`, `longLeaveCount`, `allCount`
+### 2. RLS policies are RESTRICTIVE instead of PERMISSIVE
+All RLS policies on the `employees` table are set to `RESTRICTIVE` (the `Permissive: No` in the policy listing). When multiple restrictive policies exist, ALL must pass. The `SELECT` policy with `USING (true)` combined with the `INSERT` policy requiring admin role — when both are restrictive, they conflict. The insert policy should be `PERMISSIVE` (which is the default for `CREATE POLICY`).
 
-**3. Add circular filter buttons to Manage Team header**
-- Three pill/circle buttons between the title and the add/import buttons:
-  - **All** (count) — default selected
-  - **Remote** (count)
-  - **Long Leave** (count)
-- Styled as small circular badges with counts, highlighted when active (emerald bg when selected, stone-100 otherwise)
+Looking at it more carefully, the policies were created without `AS RESTRICTIVE`, so they should be permissive by default. The display might just be showing metadata differently. The main issue is #1 — the missing unique constraint.
 
-**4. Use correct list in each context**
-- Attendance grid + daily stats + employee stats → `attendanceEmployees`
-- Manage Team member list → `manageTeamEmployees`
-- Org chart + total employee counts → all employees (no filter)
+### 3. Error not surfaced to user
+The code does `alert('Team imported successfully!')` even if individual upserts fail, because errors from individual `supabase.from('employees').upsert()` calls are not checked.
+
+### Implementation Plan
+
+1. **Database migration**: Add `UNIQUE` constraint on `employees.email`
+2. **Code fix in `AdminControls.tsx`**: 
+   - Check the `.error` response from each upsert call
+   - Use batch upsert (single call with array) instead of looping one-by-one for better performance
+   - Show accurate success/failure counts
+   - Add flexible column detection for more robust Excel parsing
+
+### Files to change
+- **New migration SQL**: `ALTER TABLE public.employees ADD CONSTRAINT employees_email_unique UNIQUE (email);`
+- **`src/components/AdminControls.tsx`**: Refactor `handleExcelImport` to batch upsert with error handling
 

@@ -125,6 +125,7 @@ const AttendanceTracker = () => {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [activeTab, setActiveTab] = useState<'grid' | 'org'>('grid');
   const [selectedManagerId, setSelectedManagerId] = useState<string | null>(null);
+  const [teamFilter, setTeamFilter] = useState<'all' | 'remote' | 'long-leave'>('all');
   
   // UI States
   const [showAddMember, setShowAddMember] = useState(false);
@@ -401,11 +402,26 @@ const AttendanceTracker = () => {
     return 'unmarked';
   };
 
-  const displayEmployees = useMemo(() => {
+  // For attendance grid: exclude remote & long-leave
+  const attendanceEmployees = useMemo(() => {
     return employees
       .filter(emp => emp.email !== 'virajaiitk@gmail.com' && emp.workType !== 'remote' && !emp.onLongLeave)
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [employees]);
+
+  // For manage team: filter by teamFilter state
+  const allTeamEmployees = useMemo(() => {
+    return employees.filter(emp => emp.email !== 'virajaiitk@gmail.com').sort((a, b) => a.name.localeCompare(b.name));
+  }, [employees]);
+
+  const remoteCount = useMemo(() => allTeamEmployees.filter(e => e.workType === 'remote').length, [allTeamEmployees]);
+  const longLeaveCount = useMemo(() => allTeamEmployees.filter(e => e.onLongLeave).length, [allTeamEmployees]);
+
+  const manageTeamEmployees = useMemo(() => {
+    if (teamFilter === 'remote') return allTeamEmployees.filter(e => e.workType === 'remote');
+    if (teamFilter === 'long-leave') return allTeamEmployees.filter(e => e.onLongLeave);
+    return allTeamEmployees;
+  }, [allTeamEmployees, teamFilter]);
 
   const dailyStats = useMemo(() => {
     return daysInMonth.map(date => {
@@ -415,9 +431,9 @@ const AttendanceTracker = () => {
         return { date, percentage: 0, isBelowThreshold: false, type: status };
       }
 
-      const statuses = displayEmployees.map(e => getAttendanceStatus(e.id, date));
+      const statuses = attendanceEmployees.map(e => getAttendanceStatus(e.id, date));
       const inOfficeCount = statuses.filter(s => s === 'in-office' || s === 'unmarked').length;
-      const percentage = displayEmployees.length > 0 ? (inOfficeCount / displayEmployees.length) * 100 : 0;
+      const percentage = attendanceEmployees.length > 0 ? (inOfficeCount / attendanceEmployees.length) * 100 : 0;
       return {
         date,
         percentage,
@@ -425,11 +441,11 @@ const AttendanceTracker = () => {
         type: 'workday'
       };
     });
-  }, [daysInMonth, displayEmployees, attendance, holidays]);
+  }, [daysInMonth, attendanceEmployees, attendance, holidays]);
 
   const employeeStats = useMemo(() => {
     const workingDays = daysInMonth.filter(isWorkingDay);
-    return displayEmployees.map(emp => {
+    return attendanceEmployees.map((emp: Employee) => {
       const statuses = workingDays.map(date => getAttendanceStatus(emp.id, date));
       const inOfficeCount = statuses.filter(s => s === 'in-office' || s === 'unmarked').length;
       const percentage = workingDays.length > 0 ? (inOfficeCount / workingDays.length) * 100 : 0;
@@ -439,7 +455,7 @@ const AttendanceTracker = () => {
         isBelowThreshold: percentage < 70
       };
     });
-  }, [daysInMonth, displayEmployees, attendance, holidays]);
+  }, [daysInMonth, attendanceEmployees, attendance, holidays]);
 
   if (loading) {
     return (
@@ -535,7 +551,7 @@ const AttendanceTracker = () => {
                 Threshold: 70%
               </div>
               <div className="px-4 py-2 bg-stone-100 text-stone-600 rounded-xl text-sm font-semibold">
-                {displayEmployees.length} Employees
+                {attendanceEmployees.length} Employees
               </div>
             </div>
         </div>
@@ -730,11 +746,42 @@ const AttendanceTracker = () => {
           <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Manage Members */}
             <div className="bg-white p-6 rounded-3xl border border-stone-200 shadow-sm space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="font-bold flex items-center gap-2">
-                  <UserIcon className="w-5 h-5 text-emerald-600" />
-                  Manage Team
-                </h3>
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <div className="flex items-center gap-3">
+                  <h3 className="font-bold flex items-center gap-2">
+                    <UserIcon className="w-5 h-5 text-emerald-600" />
+                    Manage Team
+                  </h3>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => setTeamFilter('all')}
+                      className={cn(
+                        "px-3 py-1 rounded-full text-xs font-bold transition-all",
+                        teamFilter === 'all' ? "bg-emerald-600 text-white" : "bg-stone-100 text-stone-500 hover:bg-stone-200"
+                      )}
+                    >
+                      All {allTeamEmployees.length}
+                    </button>
+                    <button
+                      onClick={() => setTeamFilter('remote')}
+                      className={cn(
+                        "px-3 py-1 rounded-full text-xs font-bold transition-all",
+                        teamFilter === 'remote' ? "bg-blue-600 text-white" : "bg-stone-100 text-stone-500 hover:bg-stone-200"
+                      )}
+                    >
+                      Remote {remoteCount}
+                    </button>
+                    <button
+                      onClick={() => setTeamFilter('long-leave')}
+                      className={cn(
+                        "px-3 py-1 rounded-full text-xs font-bold transition-all",
+                        teamFilter === 'long-leave' ? "bg-orange-600 text-white" : "bg-stone-100 text-stone-500 hover:bg-stone-200"
+                      )}
+                    >
+                      Long Leave {longLeaveCount}
+                    </button>
+                  </div>
+                </div>
                 <div className="flex items-center gap-2">
                   <label className="p-2 bg-blue-50 text-blue-600 rounded-xl hover:bg-blue-100 transition-colors cursor-pointer" title="Import from Excel">
                     <FileSpreadsheet className="w-5 h-5" />
@@ -879,7 +926,7 @@ const AttendanceTracker = () => {
               </AnimatePresence>
 
               <div className="max-h-60 overflow-y-auto space-y-2 pr-2">
-                {displayEmployees.map(emp => (
+                {manageTeamEmployees.map((emp: Employee) => (
                   <div 
                     key={emp.id} 
                     onClick={() => setEditingEmployee(emp)}
@@ -990,7 +1037,7 @@ const AttendanceTracker = () => {
           </>
         ) : (
           <OrgInsightsSection 
-            employees={displayEmployees}
+            employees={employees.filter(emp => emp.email !== 'virajaiitk@gmail.com')}
             attendance={attendance}
             daysInMonth={daysInMonth}
             isWorkingDay={isWorkingDay}
@@ -1364,14 +1411,22 @@ const OrgInsightsSection = ({
   getAttendanceStatus,
   selectedManagerId,
   setSelectedManagerId
-}: any) => {
+}: {
+  employees: Employee[];
+  attendance: AttendanceRecord[];
+  daysInMonth: Date[];
+  isWorkingDay: (date: Date) => boolean;
+  getAttendanceStatus: (employeeId: string, date: Date) => string;
+  selectedManagerId: string | null;
+  setSelectedManagerId: (id: string) => void;
+}) => {
   const managers = useMemo(() => {
-    const managerNames = new Set(employees.map(e => e.reportingManagerName).filter(Boolean));
-    return employees.filter(e => managerNames.has(e.name)).sort((a,b) => a.name.localeCompare(b.name));
+    const managerNames = new Set(employees.map((e: Employee) => e.manager).filter(Boolean));
+    return employees.filter((e: Employee) => managerNames.has(e.name)).sort((a: Employee, b: Employee) => a.name.localeCompare(b.name));
   }, [employees]);
 
   const getDirectReports = (managerName: string) => {
-    return employees.filter(e => e.reportingManagerName === managerName);
+    return employees.filter((e: Employee) => e.manager === managerName);
   };
 
   const getSubOrgAttendance = (managerName: string, date: Date, depth = 0): any[] => {
