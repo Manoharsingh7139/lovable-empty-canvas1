@@ -1411,14 +1411,22 @@ const OrgInsightsSection = ({
   getAttendanceStatus,
   selectedManagerId,
   setSelectedManagerId
-}: any) => {
+}: {
+  employees: Employee[];
+  attendance: AttendanceRecord[];
+  daysInMonth: Date[];
+  isWorkingDay: (date: Date) => boolean;
+  getAttendanceStatus: (employeeId: string, date: Date) => string;
+  selectedManagerId: string | null;
+  setSelectedManagerId: (id: string) => void;
+}) => {
   const managers = useMemo(() => {
-    const managerNames = new Set(employees.map(e => e.reportingManagerName).filter(Boolean));
-    return employees.filter(e => managerNames.has(e.name)).sort((a,b) => a.name.localeCompare(b.name));
+    const managerNames = new Set(employees.map((e: Employee) => e.manager).filter(Boolean));
+    return employees.filter((e: Employee) => managerNames.has(e.name)).sort((a: Employee, b: Employee) => a.name.localeCompare(b.name));
   }, [employees]);
 
   const getDirectReports = (managerName: string) => {
-    return employees.filter(e => e.reportingManagerName === managerName);
+    return employees.filter((e: Employee) => e.manager === managerName);
   };
 
   const getSubOrgAttendance = (managerName: string, date: Date, depth = 0): any[] => {
