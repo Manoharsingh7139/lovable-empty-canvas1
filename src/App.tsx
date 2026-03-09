@@ -3,7 +3,8 @@ import {
   auth, db, handleFirestoreError, OperationType 
 } from './firebase';
 import { 
-  signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, User 
+  signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile,
+  onAuthStateChanged, signOut, User 
 } from 'firebase/auth';
 import { 
   collection, doc, getDocs, setDoc, onSnapshot, query, where, Timestamp, deleteDoc
@@ -126,6 +127,11 @@ const AttendanceTracker = () => {
   const [activeTab, setActiveTab] = useState<'grid' | 'org'>('grid');
   const [selectedManagerId, setSelectedManagerId] = useState<string | null>(null);
   const [teamFilter, setTeamFilter] = useState<'all' | 'remote' | 'long-leave'>('all');
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authName, setAuthName] = useState('');
+  const [authError, setAuthError] = useState('');
   
   // UI States
   const [showAddMember, setShowAddMember] = useState(false);
@@ -207,12 +213,24 @@ const AttendanceTracker = () => {
     };
   }, [user]);
 
-  const handleLogin = async () => {
-    const provider = new GoogleAuthProvider();
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
     try {
-      await signInWithPopup(auth, provider);
-    } catch (error) {
-      console.error("Login failed", error);
+      if (authMode === 'signup') {
+        const cred = await createUserWithEmailAndPassword(auth, authEmail, authPassword);
+        if (authName) await updateProfile(cred.user, { displayName: authName });
+      } else {
+        await signInWithEmailAndPassword(auth, authEmail, authPassword);
+      }
+    } catch (error: any) {
+      const msg = error?.code === 'auth/user-not-found' ? 'No account found with this email.'
+        : error?.code === 'auth/wrong-password' ? 'Incorrect password.'
+        : error?.code === 'auth/email-already-in-use' ? 'Email already in use.'
+        : error?.code === 'auth/weak-password' ? 'Password must be at least 6 characters.'
+        : error?.code === 'auth/invalid-email' ? 'Invalid email address.'
+        : error?.message || 'Authentication failed.';
+      setAuthError(msg);
     }
   };
 
@@ -481,16 +499,68 @@ const AttendanceTracker = () => {
             <Users className="w-10 h-10 text-emerald-600" />
           </div>
           <h1 className="text-4xl font-bold text-stone-900 mb-4 tracking-tight">Team Attendance</h1>
-          <p className="text-stone-500 mb-10 leading-relaxed">
-            Track daily attendance, monitor thresholds, and ensure team compliance with ease.
+          <p className="text-stone-500 mb-8 leading-relaxed">
+            {authMode === 'login' ? 'Sign in to your account' : 'Create a new account'}
           </p>
-          <button 
-            onClick={handleLogin}
-            className="w-full py-4 bg-stone-900 text-white rounded-2xl font-semibold hover:bg-stone-800 transition-all active:scale-95 flex items-center justify-center gap-3 shadow-lg shadow-stone-900/20"
-          >
-            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-6 h-6" alt="Google" />
-            Sign in with Google
-          </button>
+          
+          <form onSubmit={handleLogin} className="space-y-4 text-left">
+            {authMode === 'signup' && (
+              <div>
+                <label className="block text-sm font-medium text-stone-600 mb-1">Name</label>
+                <input
+                  type="text"
+                  value={authName}
+                  onChange={e => setAuthName(e.target.value)}
+                  className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none transition-all"
+                  placeholder="Your name"
+                />
+              </div>
+            )}
+            <div>
+              <label className="block text-sm font-medium text-stone-600 mb-1">Email</label>
+              <input
+                type="email"
+                value={authEmail}
+                onChange={e => setAuthEmail(e.target.value)}
+                required
+                className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none transition-all"
+                placeholder="you@example.com"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-stone-600 mb-1">Password</label>
+              <input
+                type="password"
+                value={authPassword}
+                onChange={e => setAuthPassword(e.target.value)}
+                required
+                minLength={6}
+                className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none transition-all"
+                placeholder="••••••••"
+              />
+            </div>
+            
+            {authError && (
+              <p className="text-red-500 text-sm bg-red-50 p-3 rounded-xl">{authError}</p>
+            )}
+            
+            <button 
+              type="submit"
+              className="w-full py-4 bg-stone-900 text-white rounded-2xl font-semibold hover:bg-stone-800 transition-all active:scale-95 shadow-lg shadow-stone-900/20"
+            >
+              {authMode === 'login' ? 'Sign In' : 'Create Account'}
+            </button>
+          </form>
+          
+          <p className="mt-6 text-sm text-stone-400">
+            {authMode === 'login' ? "Don't have an account? " : 'Already have an account? '}
+            <button 
+              onClick={() => { setAuthMode(authMode === 'login' ? 'signup' : 'login'); setAuthError(''); }}
+              className="text-emerald-600 font-semibold hover:underline"
+            >
+              {authMode === 'login' ? 'Sign Up' : 'Sign In'}
+            </button>
+          </p>
         </motion.div>
       </div>
     );
